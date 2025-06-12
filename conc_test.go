@@ -5,22 +5,27 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 )
 
-func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) {
+func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 	tRes := task.Res
 	select {
 	case <-task.Done():
 	default:
 		t.Error("expected task done chan to be closed")
+		return false
 	}
 	if !reflect.DeepEqual(res, tRes) {
 		t.Errorf("expected task Res to be=%v, got=%v", res, tRes)
+		return false
 	}
 	tErr := task.Err
 	if err != tErr {
 		t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+		return false
 	}
+	return true
 }
 
 func TestTaskCompleteCancelAfterComplete(t *testing.T) {
@@ -93,4 +98,38 @@ func TestTaskCustomComplete(t *testing.T) {
 	task3.Run()
 
 	testDoneTask(t, task3, "also done", nil)
+}
+
+func TestQueue(t *testing.T) {
+
+	f := func() (string, error) {
+		return "done", nil
+	}
+	task := NewTask(f)
+
+	q := NewQueue[string]()
+	q.Push(task)
+	task.Run()
+	q.Start()
+	q.Kill()
+	testDoneTask(t, task, "done", nil)
+
+	ff := func() (string, error) {
+		<-time.After(500 * time.Millisecond)
+		return "done", nil
+	}
+
+	q = NewQueue[string]()
+	fast := q.PushFunc(f)
+	slow := q.PushFunc(ff)
+	q.Start()
+	<-fast.Done()
+	q.Kill()
+	<-slow.Done()
+	if !testDoneTask(t, fast, "done", nil) {
+		t.Error("error in fast task")
+	}
+	if !testDoneTask(t, slow, "", ErrTaskKilled) {
+		t.Error("error in slow task")
+	}
 }

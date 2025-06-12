@@ -152,7 +152,7 @@ type TaskQueue[T any] struct {
 }
 
 // TODO: return true if task was pushed successfully
-func (tq *TaskQueue[T]) Push(f func() (T, error)) *Task[T] {
+func (tq *TaskQueue[T]) PushFunc(f func() (T, error)) *Task[T] {
 	var res T
 	ch := make(chan struct{})
 	t := &Task[T]{
@@ -167,6 +167,9 @@ func (tq *TaskQueue[T]) Push(f func() (T, error)) *Task[T] {
 	return t
 }
 
+func (tq *TaskQueue[T]) Push(t *Task[T]) {
+	tq.tryEnqueue(t)
+}
 func (tq *TaskQueue[T]) tryEnqueue(t *Task[T]) {
 	go func() {
 		select {
@@ -237,11 +240,25 @@ func (tq *TaskQueue[T]) cancelWork(ch chan *Task[T]) {
 }
 
 func (tq *TaskQueue[T]) runTask(t *Task[T]) {
+	resCh := make(chan T, 1)
+	errCh := make(chan error, 1)
 	select {
 	case <-t.Done():
 	default:
-		res, err := tq.wrapWithRecover(t.f)
-		t.Complete(res, err)
+		go func() {
+			var err error
+			var res T
+			res, err = tq.wrapWithRecover(t.f)
+			resCh <- res
+			errCh <- err
+		}()
+		select {
+		case <-tq.done:
+			t.CancelWith(ErrTaskKilled)
+		case res := <-resCh:
+			err := <-errCh
+			t.complete(res, err)
+		}
 	}
 }
 
