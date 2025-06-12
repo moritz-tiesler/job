@@ -6,55 +6,6 @@ import (
 	"sync"
 )
 
-func AttemptWrite[T any](ch chan T, v T) bool {
-	select {
-	case ch <- v:
-		return true
-	default:
-		return false
-	}
-}
-
-func AttemptRead[T any](ch chan T) (T, bool) {
-	var v T
-	select {
-	case v, open := <-ch:
-		if open {
-			return v, true
-		}
-		return v, false
-	default:
-		return v, false
-	}
-}
-
-func GoAndCollect[T any](res chan T, fs ...func() (T, error)) []T {
-	ch := make(chan T)
-
-	var wg sync.WaitGroup
-	results := []T{}
-	for _, f := range fs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			r, err := f()
-			if err != nil {
-				ch <- r
-			}
-		}()
-	}
-
-	go func() {
-		wg.Wait()
-		close(ch)
-	}()
-
-	for r := range ch {
-		results = append(results, r)
-	}
-	return results
-}
-
 var (
 	ErrTaskKilled   error = errors.New("Task killed")
 	ErrTaskCanceled error = errors.New("Task canceled")
