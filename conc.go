@@ -121,6 +121,7 @@ func (tq *TaskQueue[T]) PushFunc(f func() (T, error)) *Task[T] {
 func (tq *TaskQueue[T]) Push(t *Task[T]) {
 	tq.tryEnqueue(t)
 }
+
 func (tq *TaskQueue[T]) tryEnqueue(t *Task[T]) {
 	go func() {
 		select {
@@ -134,6 +135,7 @@ func (tq *TaskQueue[T]) tryEnqueue(t *Task[T]) {
 func (tq *TaskQueue[T]) Kill() int {
 	close(tq.done)
 	tq.wg.Wait()
+
 	return len(tq.work)
 }
 
@@ -154,13 +156,15 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 	return q
 }
 
+// TODO: init bouncer here? pushes to queue before start should error?
 func (tq *TaskQueue[T]) Start() {
+
 	tq.wg.Add(tq.opts.numWorkers)
 	for range tq.opts.numWorkers {
 		go func() {
 			defer tq.wg.Done()
 			for t := range tq.work {
-				tq.runTask(t)
+				go tq.runTask(t)
 			}
 		}()
 	}
@@ -190,25 +194,29 @@ func (tq *TaskQueue[T]) cancelWork(ch chan *Task[T]) {
 	}
 }
 
+type taskRes[T any] struct {
+	res T
+	err error
+}
+
 func (tq *TaskQueue[T]) runTask(t *Task[T]) {
-	resCh := make(chan T, 1)
-	errCh := make(chan error, 1)
+	resCh := make(chan taskRes[T], 1)
 	select {
 	case <-t.Done():
+	case <-tq.done:
+		t.CancelWith(ErrTaskKilled)
 	default:
 		go func() {
 			var err error
 			var res T
 			res, err = tq.wrapWithRecover(t.f)
-			resCh <- res
-			errCh <- err
+			resCh <- taskRes[T]{res, err}
 		}()
 		select {
 		case <-tq.done:
 			t.CancelWith(ErrTaskKilled)
 		case res := <-resCh:
-			err := <-errCh
-			t.complete(res, err)
+			t.complete(res.res, res.err)
 		}
 	}
 }

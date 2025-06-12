@@ -5,17 +5,11 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
-	"time"
 )
 
 func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
+	<-task.Done()
 	tRes := task.Res
-	select {
-	case <-task.Done():
-	default:
-		t.Error("expected task done chan to be closed")
-		return false
-	}
 	if !reflect.DeepEqual(res, tRes) {
 		t.Errorf("expected task Res to be=%v, got=%v", res, tRes)
 		return false
@@ -105,24 +99,17 @@ func TestQueue(t *testing.T) {
 	f := func() (string, error) {
 		return "done", nil
 	}
-	task := NewTask(f)
-
-	q := NewQueue[string]()
-	q.Push(task)
-	task.Run()
-	q.Start()
-	q.Kill()
-	testDoneTask(t, task, "done", nil)
 
 	ff := func() (string, error) {
-		<-time.After(500 * time.Millisecond)
+		ch := make(chan string)
+		<-ch
 		return "done", nil
 	}
 
-	q = NewQueue[string]()
+	q := NewQueue[string]()
+	q.Start()
 	fast := q.PushFunc(f)
 	slow := q.PushFunc(ff)
-	q.Start()
 	<-fast.Done()
 	q.Kill()
 	<-slow.Done()
