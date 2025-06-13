@@ -9,17 +9,20 @@ import (
 
 func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 	<-task.Done()
+	ok := true
 	tRes := task.Res
 	if !reflect.DeepEqual(res, tRes) {
 		t.Errorf("expected task Res to be=%v, got=%v", res, tRes)
-		return false
+		ok = ok && false
 	}
 	tErr := task.Err
 	if err != tErr {
-		t.Errorf("expected task err to be=%v, got=%v", err, tErr)
-		return false
+		if err.Error() != tErr.Error() {
+			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+			ok = ok && false
+		}
 	}
-	return true
+	return ok
 }
 
 func TestTaskCompleteCancelAfterComplete(t *testing.T) {
@@ -94,7 +97,7 @@ func TestTaskCustomComplete(t *testing.T) {
 	testDoneTask(t, task3, "also done", nil)
 }
 
-func TestQueue(t *testing.T) {
+func TestQueueKillBeforeComplete(t *testing.T) {
 
 	f := func() (string, error) {
 		return "done", nil
@@ -118,5 +121,25 @@ func TestQueue(t *testing.T) {
 	}
 	if !testDoneTask(t, slow, "", ErrTaskKilled) {
 		t.Error("error in slow task")
+	}
+}
+
+func TestQueueCustomPanic(t *testing.T) {
+	q := NewQueue(
+		WithPanicDefer(
+			func(a any, t *string, err *error) {
+				*err = fmt.Errorf("%s", a)
+				*t = "zero"
+			}),
+	)
+
+	f := func() (string, error) {
+		panic("f panicked")
+	}
+
+	task := q.PushFunc(f)
+	q.Start()
+	if !testDoneTask(t, task, "zero", fmt.Errorf("f panicked")) {
+		t.Error("error in fast task")
 	}
 }
