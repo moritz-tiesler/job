@@ -16,10 +16,28 @@ func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 		ok = ok && false
 	}
 	tErr := task.Err
-	if err != tErr {
-		if err.Error() != tErr.Error() {
+	if errors.Is(err, ErrTaskPanic) {
+		if !errors.Is(tErr, ErrTaskPanic) {
 			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
 			ok = ok && false
+		}
+
+	} else if errors.Is(err, ErrTaskCanceled) {
+		if !errors.Is(tErr, ErrTaskCanceled) {
+			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+			ok = ok && false
+		}
+	} else if errors.Is(err, ErrTaskKilled) {
+		if !errors.Is(tErr, ErrTaskKilled) {
+			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+			ok = ok && false
+		}
+	} else {
+		if err != tErr {
+			if err.Error() != tErr.Error() {
+				t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+				ok = ok && false
+			}
 		}
 	}
 	return ok
@@ -141,5 +159,42 @@ func TestQueueCustomPanic(t *testing.T) {
 	q.Start()
 	if !testDoneTask(t, task, "zero", fmt.Errorf("f panicked")) {
 		t.Error("error in fast task")
+	}
+}
+
+func TestQueueWrapPanic(t *testing.T) {
+	q := NewQueue(
+		WithPanicDefer[string](WrapPanic),
+	)
+
+	f := func() (string, error) {
+		panic("f panicked")
+	}
+
+	task := q.PushFunc(f)
+	q.Start()
+	if !testDoneTask(t, task, "", ErrTaskPanic) {
+		t.Error("error in task")
+	}
+}
+
+func TestQueueTasksCancelledWithoutStart(t *testing.T) {
+	q := NewQueue[string]()
+
+	f := func() (string, error) {
+		return "f", nil
+	}
+	ff := func() (string, error) {
+		return "ff", nil
+	}
+
+	taskF := q.PushFunc(f)
+	taskFF := q.PushFunc(ff)
+	q.Kill()
+	if !testDoneTask(t, taskF, "", ErrTaskKilled) {
+		t.Error("error in task")
+	}
+	if !testDoneTask(t, taskFF, "", ErrTaskKilled) {
+		t.Error("error in task")
 	}
 }
