@@ -35,7 +35,9 @@ func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 		}
 	} else {
 		if err != tErr {
-			if err.Error() != tErr.Error() {
+			if err == nil || tErr == nil {
+				t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+			} else if err.Error() != tErr.Error() {
 				t.Errorf("expected task err to be=%v, got=%v", err, tErr)
 				ok = ok && false
 			}
@@ -267,4 +269,30 @@ func TestQueueLoopOverOut(t *testing.T) {
 		t.Errorf("expected %d tasks in out queue, got %d", nTasks, n)
 	}
 
+}
+
+func TestQueuePendingWorkSentToOutAferKill(t *testing.T) {
+
+	q := NewQueue[string]()
+
+	f := func() (string, error) {
+		<-time.After(50 * time.Millisecond)
+		return "f", nil
+	}
+
+	nTasks := 500
+	for range nTasks {
+		q.PushFunc(f)
+	}
+	out := q.Start()
+	q.Kill()
+	n := 0
+	for tt := range out {
+		n++
+		testDoneTask(t, tt, "", ErrTaskKilled)
+	}
+
+	if n != nTasks {
+		t.Errorf("expected %d tasks in out queue, got %d", nTasks, n)
+	}
 }

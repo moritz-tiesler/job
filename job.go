@@ -97,8 +97,8 @@ func defaultOpts[T any]() *opts[T] {
 
 type TaskQueue[T any] struct {
 	work    chan *Task[T]
-	bouncer BusyChan[*Task[T]]
-	compl   BusyChan[*Task[T]]
+	bouncer *BusyChan[*Task[T]]
+	compl   *BusyChan[*Task[T]]
 	done    chan struct{}
 	wg      sync.WaitGroup
 	opts    *opts[T]
@@ -137,13 +137,15 @@ func (tq *TaskQueue[T]) tryEnqueue(t *Task[T]) error {
 	}
 }
 
+// TODO: kIll should return chan with all killed tasks
 func (tq *TaskQueue[T]) Kill() int {
 	close(tq.done)
 	tq.bouncer.AbortSends()
 	tq.bouncer.Close()
 	tq.wg.Wait()
-	tq.compl.AbortSends()
-	tq.compl.Close()
+	go func() {
+		tq.compl.Close()
+	}()
 	return len(tq.work)
 }
 
@@ -153,22 +155,25 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 		o(opts)
 	}
 	work := make(chan *Task[T], opts.queueBuf)
+	compl :=
+		BusyChan[*Task[T]]{
+			ch:        make(chan *Task[T]),
+			abortSend: make(chan struct{}),
+		}
 	q := &TaskQueue[T]{
 		work: work,
 		done: make(chan struct{}),
 		opts: opts,
-		bouncer: BusyChan[*Task[T]]{
+		bouncer: &BusyChan[*Task[T]]{
 			ch:        make(chan *Task[T]),
 			abortSend: make(chan struct{}),
 			onAbort: func(t *Task[T]) *Task[T] {
 				t.CancelWith(ErrTaskKilled)
+				compl.Send(t)
 				return t
 			},
 		},
-		compl: BusyChan[*Task[T]]{
-			ch:        make(chan *Task[T]),
-			abortSend: make(chan struct{}),
-		},
+		compl: &compl,
 	}
 
 	return q
@@ -180,7 +185,7 @@ func (tq *TaskQueue[T]) Start() chan *Task[T] {
 	for range tq.opts.numWorkers {
 		go func() {
 			defer tq.wg.Done()
-			tq.runWorker(tq.work, &tq.compl)
+			tq.runWorker(tq.work, tq.compl)
 		}()
 	}
 	tq.wg.Add(1)
@@ -192,7 +197,7 @@ func (tq *TaskQueue[T]) Start() chan *Task[T] {
 				tq.work <- guest
 			case <-tq.done:
 				close(tq.work)
-				tq.cancelWork(tq.work, &tq.compl)
+				tq.cancelWork(tq.work, tq.compl)
 				return
 			}
 		}
@@ -216,6 +221,7 @@ func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out *BusyChan[*Task[T]])
 
 func (tq *TaskQueue[T]) cancelWork(work chan *Task[T], out *BusyChan[*Task[T]]) {
 	for t := range work {
+		fmt.Println("cancelling pending t")
 		select {
 		case <-t.Done():
 		default:
