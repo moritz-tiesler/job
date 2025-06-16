@@ -157,9 +157,10 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 }
 
 // TODO: init bouncer here? pushes to queue before start should error?
-func (tq *TaskQueue[T]) Start() {
+func (tq *TaskQueue[T]) Start() chan *Task[T] {
 
 	out := make(chan *Task[T])
+	compl := BusyChan[*Task[T]]{ch: make(chan *Task[T])}
 	tq.wg.Add(tq.opts.numWorkers)
 	for range tq.opts.numWorkers {
 		go func() {
@@ -176,19 +177,27 @@ func (tq *TaskQueue[T]) Start() {
 				tq.work <- guest
 			case <-tq.done:
 				close(tq.work)
-				tq.cancelWork(tq.work)
+				fmt.Println("work closed")
+				tq.cancelWork(tq.work, out)
+				close(out)
 				return
 			}
 		}
 	}()
+
+	go func() {
+		for t := range out {
+			compl.Send(t)
+		}
+		compl.Close()
+	}()
+
+	return compl.Ch()
 }
 
 func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out chan<- *Task[T]) {
-	var wg sync.WaitGroup
 	for t := range work {
-		wg.Add(1)
 		go func() {
-			defer wg.Done()
 			tt := tq.runTask(t)
 			select {
 			case <-tq.done:
@@ -196,16 +205,16 @@ func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out chan<- *Task[T]) {
 			}
 		}()
 	}
-	wg.Wait()
 }
 
-func (tq *TaskQueue[T]) cancelWork(ch chan *Task[T]) {
+func (tq *TaskQueue[T]) cancelWork(ch chan *Task[T], out chan *Task[T]) {
 	for t := range ch {
 		select {
 		case <-t.Done():
 		default:
 			t.CancelWith(ErrTaskKilled)
 		}
+		out <- t
 	}
 }
 
@@ -247,6 +256,7 @@ func WrapPanic[T any](rec any, _ *T, err *error) {
 }
 
 func (tq *TaskQueue[T]) wrapWithRecover(f func() (T, error)) (res T, err error) {
+
 	if tq.opts.panicDefer != nil {
 		defer func() {
 			if r := recover(); r != nil {
@@ -256,4 +266,26 @@ func (tq *TaskQueue[T]) wrapWithRecover(f func() (T, error)) (res T, err error) 
 	}
 	res, err = f()
 	return
+}
+
+type BusyChan[T any] struct {
+	ch chan T
+	wg sync.WaitGroup
+}
+
+func (bc *BusyChan[T]) Send(val T) {
+	bc.wg.Add(1)
+	go func() {
+		defer bc.wg.Done()
+		bc.ch <- val
+	}()
+}
+
+func (bc *BusyChan[T]) Ch() chan T {
+	return bc.ch
+}
+
+func (bc *BusyChan[T]) Close() {
+	bc.wg.Wait()
+	close(bc.ch)
 }

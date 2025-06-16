@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"testing"
+	"time"
 )
 
 func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
@@ -197,4 +198,30 @@ func TestQueueTasksCancelledWithoutStart(t *testing.T) {
 	if !testDoneTask(t, taskFF, "", ErrTaskKilled) {
 		t.Error("error in task")
 	}
+}
+
+func TestQueueLoopOverOut(t *testing.T) {
+	q := NewQueue[string]()
+
+	f := func() (string, error) {
+		return "f", nil
+	}
+
+	nTasks := 3
+	for range nTasks {
+		q.PushFunc(f)
+	}
+	out := q.Start()
+	<-time.After(2 * time.Second)
+	q.Kill()
+	n := 0
+	for task := range out {
+		n++
+		testDoneTask(t, task, "f", nil)
+	}
+
+	if n != nTasks {
+		t.Errorf("expected %d tasks in out queue, got %d", nTasks, n)
+	}
+
 }
