@@ -216,6 +216,8 @@ func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out *BusyChan[*Task[T]])
 			defer wg.Done()
 			select {
 			case <-tq.done:
+				t.CancelWith(ErrTaskKilled)
+				out.Send(t)
 			default:
 				tt := tq.runTask(t)
 				out.Send(tt)

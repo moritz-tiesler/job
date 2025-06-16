@@ -8,12 +8,6 @@ import (
 	"time"
 )
 
-// func testPendingTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
-// 	select {
-// 	case <-task.Done():
-// 	}
-// }
-
 func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 	select {
 	case <-task.Done():
@@ -182,7 +176,7 @@ func TestQueueKillBeforeCompleteLoop(t *testing.T) {
 	for range out {
 		n++
 	}
-	if n != 2 {
+	if n != nTasks {
 		t.Errorf("expected %d tasks in out queue, got %d", nTasks, n)
 	}
 
