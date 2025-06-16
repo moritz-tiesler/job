@@ -130,8 +130,8 @@ func TestQueueKillBeforeComplete(t *testing.T) {
 
 	q := NewQueue[string]()
 	q.Start()
-	fast := q.PushFunc(f)
-	slow := q.PushFunc(ff)
+	fast, _ := q.PushFunc(f)
+	slow, _ := q.PushFunc(ff)
 	<-fast.Done()
 	q.Kill()
 	<-slow.Done()
@@ -156,7 +156,7 @@ func TestQueueCustomPanic(t *testing.T) {
 		panic("f panicked")
 	}
 
-	task := q.PushFunc(f)
+	task, _ := q.PushFunc(f)
 	q.Start()
 	if !testDoneTask(t, task, "zero", fmt.Errorf("f panicked")) {
 		t.Error("error in fast task")
@@ -172,7 +172,7 @@ func TestQueueWrapPanic(t *testing.T) {
 		panic("f panicked")
 	}
 
-	task := q.PushFunc(f)
+	task, _ := q.PushFunc(f)
 	q.Start()
 	if !testDoneTask(t, task, "", ErrTaskPanic) {
 		t.Error("error in task")
@@ -189,8 +189,8 @@ func TestQueueTasksKilledWithoutStart(t *testing.T) {
 		return "ff", nil
 	}
 
-	taskF := q.PushFunc(f)
-	taskFF := q.PushFunc(ff)
+	taskF, _ := q.PushFunc(f)
+	taskFF, _ := q.PushFunc(ff)
 	q.Kill()
 	if !testDoneTask(t, taskF, "", ErrTaskKilled) {
 		t.Error("error in task")
@@ -213,8 +213,14 @@ func TestQueueLoopOverOut(t *testing.T) {
 	}
 	out := q.Start()
 	go func() {
-		<-time.After(2 * time.Second)
+		<-time.After(100 * time.Millisecond)
 		q.Kill()
+		for range nTasks {
+			_, err := q.PushFunc(f)
+			if err == nil {
+				t.Errorf("expected error when pushing to killed queue, got nil error")
+			}
+		}
 	}()
 	n := 0
 	for task := range out {

@@ -9,6 +9,7 @@ import (
 var (
 	ErrTaskKilled   error = errors.New("Task killed")
 	ErrTaskCanceled error = errors.New("Task canceled")
+	ErrQueueKilled  error = errors.New("Queue killed")
 )
 
 type Task[T any] struct {
@@ -104,7 +105,7 @@ type TaskQueue[T any] struct {
 }
 
 // TODO: return true if task was pushed successfully
-func (tq *TaskQueue[T]) PushFunc(f func() (T, error)) *Task[T] {
+func (tq *TaskQueue[T]) PushFunc(f func() (T, error)) (*Task[T], error) {
 	var res T
 	ch := make(chan struct{})
 	t := &Task[T]{
@@ -115,16 +116,25 @@ func (tq *TaskQueue[T]) PushFunc(f func() (T, error)) *Task[T] {
 		sync.Mutex{},
 		ch,
 	}
-	tq.tryEnqueue(t)
-	return t
+	err := tq.tryEnqueue(t)
+	if err != nil {
+		return nil, err
+	}
+	return t, nil
 }
 
-func (tq *TaskQueue[T]) Push(t *Task[T]) {
-	tq.tryEnqueue(t)
+func (tq *TaskQueue[T]) Push(t *Task[T]) error {
+	return tq.tryEnqueue(t)
 }
 
-func (tq *TaskQueue[T]) tryEnqueue(t *Task[T]) {
-	tq.bouncer.Send(t)
+func (tq *TaskQueue[T]) tryEnqueue(t *Task[T]) error {
+	select {
+	case <-tq.done:
+		return ErrQueueKilled
+	default:
+		tq.bouncer.Send(t)
+		return nil
+	}
 }
 
 func (tq *TaskQueue[T]) Kill() int {
