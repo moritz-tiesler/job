@@ -8,8 +8,19 @@ import (
 	"time"
 )
 
+// func testPendingTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
+// 	select {
+// 	case <-task.Done():
+// 	}
+// }
+
 func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
-	<-task.Done()
+	select {
+	case <-task.Done():
+	default:
+		t.Errorf("expected task Res to done, got running task")
+		return false
+	}
 	ok := true
 	tRes := task.Res
 	if !reflect.DeepEqual(res, tRes) {
@@ -197,6 +208,7 @@ func TestQueueCustomPanic(t *testing.T) {
 
 	task, _ := q.PushFunc(f)
 	q.Start()
+	<-task.Done()
 	if !testDoneTask(t, task, "zero", fmt.Errorf("f panicked")) {
 		t.Error("error in fast task")
 	}
@@ -213,6 +225,7 @@ func TestQueueWrapPanic(t *testing.T) {
 
 	task, _ := q.PushFunc(f)
 	q.Start()
+	<-task.Done()
 	if !testDoneTask(t, task, "", ErrTaskPanic) {
 		t.Error("error in task")
 	}

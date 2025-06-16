@@ -227,7 +227,6 @@ func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out *BusyChan[*Task[T]])
 
 func (tq *TaskQueue[T]) cancelWork(work chan *Task[T], out *BusyChan[*Task[T]]) {
 	for t := range work {
-		fmt.Println("cancelling pending t")
 		select {
 		case <-t.Done():
 		default:
