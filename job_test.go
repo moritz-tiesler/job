@@ -142,7 +142,42 @@ func TestQueueKillBeforeComplete(t *testing.T) {
 		t.Error("error in slow task")
 	}
 }
+func TestQueueKillBeforeCompleteLoop(t *testing.T) {
 
+	f := func() (string, error) {
+		return "done", nil
+	}
+
+	ff := func() (string, error) {
+		ch := make(chan string)
+		<-ch
+		return "done", nil
+	}
+
+	q := NewQueue[string]()
+	out := q.Start()
+	fast, _ := q.PushFunc(f)
+	slow, _ := q.PushFunc(ff)
+	go func() {
+		<-fast.Done()
+		q.Kill()
+	}()
+
+	n := 0
+	for range out {
+		n++
+	}
+	if n != 1 {
+		t.Errorf("bad=%d", n)
+	}
+
+	if !testDoneTask(t, fast, "done", nil) {
+		t.Error("error in fast task")
+	}
+	if !testDoneTask(t, slow, "", ErrTaskKilled) {
+		t.Error("error in slow task")
+	}
+}
 func TestQueueCustomPanic(t *testing.T) {
 	q := NewQueue(
 		WithPanicDefer(
@@ -207,7 +242,7 @@ func TestQueueLoopOverOut(t *testing.T) {
 		return "f", nil
 	}
 
-	nTasks := 3
+	nTasks := 500
 	for range nTasks {
 		q.PushFunc(f)
 	}
