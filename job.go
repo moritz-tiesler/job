@@ -193,8 +193,10 @@ func (tq *TaskQueue[T]) Start() chan *Task[T] {
 		defer tq.wg.Done()
 		for {
 			select {
-			case guest := <-tq.bouncer.Ch():
-				tq.work <- guest
+			case guest, ok := <-tq.bouncer.Ch():
+				if ok {
+					tq.work <- guest
+				}
 			case <-tq.done:
 				close(tq.work)
 				tq.cancelWork(tq.work, tq.compl)
@@ -207,16 +209,20 @@ func (tq *TaskQueue[T]) Start() chan *Task[T] {
 }
 
 func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out *BusyChan[*Task[T]]) {
+	var wg sync.WaitGroup
 	for t := range work {
+		wg.Add(1)
 		go func() {
-			tt := tq.runTask(t)
+			defer wg.Done()
 			select {
 			case <-tq.done:
 			default:
+				tt := tq.runTask(t)
 				out.Send(tt)
 			}
 		}()
 	}
+	wg.Wait()
 }
 
 func (tq *TaskQueue[T]) cancelWork(work chan *Task[T], out *BusyChan[*Task[T]]) {

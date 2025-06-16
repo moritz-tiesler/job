@@ -146,6 +146,8 @@ func TestQueueKillBeforeComplete(t *testing.T) {
 }
 func TestQueueKillBeforeCompleteLoop(t *testing.T) {
 
+	q := NewQueue[string]()
+
 	f := func() (string, error) {
 		return "done", nil
 	}
@@ -156,8 +158,8 @@ func TestQueueKillBeforeCompleteLoop(t *testing.T) {
 		return "done", nil
 	}
 
-	q := NewQueue[string]()
 	out := q.Start()
+	nTasks := 2
 	fast, _ := q.PushFunc(f)
 	slow, _ := q.PushFunc(ff)
 	go func() {
@@ -169,8 +171,8 @@ func TestQueueKillBeforeCompleteLoop(t *testing.T) {
 	for range out {
 		n++
 	}
-	if n != 1 {
-		t.Errorf("bad=%d", n)
+	if n != 2 {
+		t.Errorf("expected %d tasks in out queue, got %d", nTasks, n)
 	}
 
 	if !testDoneTask(t, fast, "done", nil) {
@@ -222,6 +224,7 @@ func TestQueueTasksKilledWithoutStart(t *testing.T) {
 	f := func() (string, error) {
 		return "f", nil
 	}
+
 	ff := func() (string, error) {
 		return "ff", nil
 	}
@@ -284,8 +287,8 @@ func TestQueuePendingWorkSentToOutAferKill(t *testing.T) {
 	for range nTasks {
 		q.PushFunc(f)
 	}
-	out := q.Start()
 	q.Kill()
+	out := q.Start()
 	n := 0
 	for tt := range out {
 		n++
@@ -294,5 +297,48 @@ func TestQueuePendingWorkSentToOutAferKill(t *testing.T) {
 
 	if n != nTasks {
 		t.Errorf("expected %d tasks in out queue, got %d", nTasks, n)
+	}
+}
+
+func TestQueuePendingWorkAndCompletedWorkSentToOutAferKill(t *testing.T) {
+
+	q := NewQueue[string]()
+
+	f := func() (string, error) {
+		<-time.After(50 * time.Millisecond)
+		return "f", nil
+	}
+
+	nTasks := 500
+	for range nTasks {
+		q.PushFunc(f)
+	}
+	out := q.Start()
+	go func() {
+		<-time.After(53 * time.Millisecond)
+		q.Kill()
+	}()
+	n := 0
+	errored := 0
+	compl := 0
+	for tt := range out {
+		n++
+		if tt.Err != nil {
+			errored++
+			testDoneTask(t, tt, "", ErrTaskKilled)
+		} else {
+			compl++
+			testDoneTask(t, tt, "f", nil)
+		}
+	}
+
+	if n != nTasks {
+		t.Errorf("expected %d tasks in out queue, got %d", nTasks, n)
+	}
+	fmt.Printf("total=%d\n", n)
+	fmt.Printf("compl=%d\n", compl)
+	fmt.Printf("errored=%d\n", errored)
+	if compl == 0 {
+		t.Errorf("expected at least one task to finish, got %d", compl)
 	}
 }
