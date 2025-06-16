@@ -179,7 +179,7 @@ func TestQueueWrapPanic(t *testing.T) {
 	}
 }
 
-func TestQueueTasksCancelledWithoutStart(t *testing.T) {
+func TestQueueTasksKilledWithoutStart(t *testing.T) {
 	q := NewQueue[string]()
 
 	f := func() (string, error) {
@@ -212,8 +212,10 @@ func TestQueueLoopOverOut(t *testing.T) {
 		q.PushFunc(f)
 	}
 	out := q.Start()
-	<-time.After(2 * time.Second)
-	q.Kill()
+	go func() {
+		<-time.After(2 * time.Second)
+		q.Kill()
+	}()
 	n := 0
 	for task := range out {
 		n++

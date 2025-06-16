@@ -96,7 +96,8 @@ func defaultOpts[T any]() *opts[T] {
 
 type TaskQueue[T any] struct {
 	work    chan *Task[T]
-	bouncer chan *Task[T]
+	bouncer BusyChan[*Task[T]]
+	compl   BusyChan[*Task[T]]
 	done    chan struct{}
 	wg      sync.WaitGroup
 	opts    *opts[T]
@@ -123,19 +124,16 @@ func (tq *TaskQueue[T]) Push(t *Task[T]) {
 }
 
 func (tq *TaskQueue[T]) tryEnqueue(t *Task[T]) {
-	go func() {
-		select {
-		case tq.bouncer <- t:
-		case <-tq.done:
-			t.CancelWith(ErrTaskKilled)
-		}
-	}()
+	tq.bouncer.Send(t)
 }
 
 func (tq *TaskQueue[T]) Kill() int {
 	close(tq.done)
+	tq.bouncer.AbortSends()
+	tq.bouncer.Close()
 	tq.wg.Wait()
-
+	tq.compl.AbortSends()
+	tq.compl.Close()
 	return len(tq.work)
 }
 
@@ -145,12 +143,22 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 		o(opts)
 	}
 	work := make(chan *Task[T], opts.queueBuf)
-	bouncer := make(chan *Task[T])
 	q := &TaskQueue[T]{
-		work:    work,
-		done:    make(chan struct{}),
-		opts:    opts,
-		bouncer: bouncer,
+		work: work,
+		done: make(chan struct{}),
+		opts: opts,
+		bouncer: BusyChan[*Task[T]]{
+			ch:        make(chan *Task[T]),
+			abortSend: make(chan struct{}),
+			onAbort: func(t *Task[T]) *Task[T] {
+				t.CancelWith(ErrTaskKilled)
+				return t
+			},
+		},
+		compl: BusyChan[*Task[T]]{
+			ch:        make(chan *Task[T]),
+			abortSend: make(chan struct{}),
+		},
 	}
 
 	return q
@@ -159,13 +167,11 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 // TODO: init bouncer here? pushes to queue before start should error?
 func (tq *TaskQueue[T]) Start() chan *Task[T] {
 
-	out := make(chan *Task[T])
-	compl := BusyChan[*Task[T]]{ch: make(chan *Task[T])}
 	tq.wg.Add(tq.opts.numWorkers)
 	for range tq.opts.numWorkers {
 		go func() {
 			defer tq.wg.Done()
-			tq.runWorker(tq.work, out)
+			go tq.runWorker(tq.work, &tq.compl)
 		}()
 	}
 	tq.wg.Add(1)
@@ -173,48 +179,40 @@ func (tq *TaskQueue[T]) Start() chan *Task[T] {
 		defer tq.wg.Done()
 		for {
 			select {
-			case guest := <-tq.bouncer:
+			case guest := <-tq.bouncer.Ch():
 				tq.work <- guest
 			case <-tq.done:
 				close(tq.work)
-				fmt.Println("work closed")
-				tq.cancelWork(tq.work, out)
-				close(out)
+				tq.cancelWork(tq.work, &tq.compl)
 				return
 			}
 		}
 	}()
 
-	go func() {
-		for t := range out {
-			compl.Send(t)
-		}
-		compl.Close()
-	}()
-
-	return compl.Ch()
+	return tq.compl.Ch()
 }
 
-func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out chan<- *Task[T]) {
+func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out *BusyChan[*Task[T]]) {
 	for t := range work {
 		go func() {
 			tt := tq.runTask(t)
 			select {
 			case <-tq.done:
-			case out <- tt:
+			default:
+				out.Send(tt)
 			}
 		}()
 	}
 }
 
-func (tq *TaskQueue[T]) cancelWork(ch chan *Task[T], out chan *Task[T]) {
+func (tq *TaskQueue[T]) cancelWork(ch chan *Task[T], out *BusyChan[*Task[T]]) {
 	for t := range ch {
 		select {
 		case <-t.Done():
 		default:
 			t.CancelWith(ErrTaskKilled)
 		}
-		out <- t
+		out.Send(t)
 	}
 }
 
@@ -269,15 +267,26 @@ func (tq *TaskQueue[T]) wrapWithRecover(f func() (T, error)) (res T, err error) 
 }
 
 type BusyChan[T any] struct {
-	ch chan T
-	wg sync.WaitGroup
+	ch        chan T
+	mu        sync.Mutex
+	wg        sync.WaitGroup
+	abortSend chan struct{}
+	onAbort   func(T) T
 }
 
 func (bc *BusyChan[T]) Send(val T) {
+	bc.mu.Lock()
 	bc.wg.Add(1)
+	bc.mu.Unlock()
 	go func() {
 		defer bc.wg.Done()
-		bc.ch <- val
+		select {
+		case bc.ch <- val:
+		case <-bc.abortSend:
+			if bc.onAbort != nil {
+				bc.onAbort(val)
+			}
+		}
 	}()
 }
 
@@ -286,6 +295,12 @@ func (bc *BusyChan[T]) Ch() chan T {
 }
 
 func (bc *BusyChan[T]) Close() {
+	bc.mu.Lock()
 	bc.wg.Wait()
+	bc.mu.Unlock()
 	close(bc.ch)
+}
+
+func (bc *BusyChan[T]) AbortSends() {
+	close(bc.abortSend)
 }
