@@ -359,6 +359,54 @@ func TestQueueCancelTaskBeforeExecution(t *testing.T) {
 	}
 
 }
+func TestQueueCloseDoor(t *testing.T) {
+
+	q := NewQueue[string]()
+
+	f := func() (string, error) {
+		return "f", nil
+	}
+
+	nTasks := 2
+	task1, _ := q.PushFunc(f)
+	task2, _ := q.PushFunc(f)
+
+	out := q.Start()
+	<-task1.Done()
+	<-task2.Done()
+
+	n := 0
+	for task := range out {
+		n++
+		testDoneTask(t, task, "f", nil)
+		if n == nTasks {
+			break
+		}
+	}
+	q.CloseDoor()
+	_, err := q.PushFunc(f)
+	if !errors.Is(err, ErrQueueClosed) {
+		t.Errorf("expected err=%v, got=%v", ErrQueueClosed, err)
+	}
+
+	q.OpenDoor()
+
+	nTasks++
+	task3, err := q.PushFunc(f)
+	<-task3.Done()
+	testDoneTask(t, task3, "f", nil)
+
+	for task := range out {
+		n++
+		testDoneTask(t, task, "f", nil)
+		if n == nTasks {
+			break
+		}
+	}
+	if n != nTasks {
+		t.Errorf("expected %d tasks in out, got %d", nTasks, n)
+	}
+}
 
 func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 	select {

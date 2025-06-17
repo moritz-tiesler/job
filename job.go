@@ -10,6 +10,7 @@ var (
 	ErrTaskKilled   error = errors.New("Task killed")
 	ErrTaskCanceled error = errors.New("Task canceled")
 	ErrQueueKilled  error = errors.New("Queue killed")
+	ErrQueueClosed  error = errors.New("Queue closed")
 )
 
 type Task[T any] struct {
@@ -96,12 +97,15 @@ func defaultOpts[T any]() *opts[T] {
 }
 
 type TaskQueue[T any] struct {
-	work    chan *Task[T]
-	bouncer *BusyChan[*Task[T]]
-	compl   *BusyChan[*Task[T]]
-	done    chan struct{}
-	wg      sync.WaitGroup
-	opts    *opts[T]
+	work           chan *Task[T]
+	bouncer        *BusyChan[*Task[T]]
+	compl          *BusyChan[*Task[T]]
+	killed         chan struct{}
+	signalDoor     chan struct{}
+	switchComplete chan struct{}
+	open           bool
+	wg             sync.WaitGroup
+	opts           *opts[T]
 }
 
 // TODO: return true if task was pushed successfully
@@ -129,17 +133,21 @@ func (tq *TaskQueue[T]) Push(t *Task[T]) error {
 
 func (tq *TaskQueue[T]) tryEnqueue(t *Task[T]) error {
 	select {
-	case <-tq.done:
+	case <-tq.killed:
 		return ErrQueueKilled
 	default:
-		tq.bouncer.Send(t)
-		return nil
+		if tq.open {
+			tq.bouncer.Send(t)
+			return nil
+		} else {
+			return ErrQueueClosed
+		}
 	}
 }
 
 // TODO: kIll should return chan with all killed tasks
 func (tq *TaskQueue[T]) Kill() int {
-	close(tq.done)
+	close(tq.killed)
 	tq.bouncer.AbortSends()
 	tq.bouncer.Close()
 	tq.wg.Wait()
@@ -147,6 +155,24 @@ func (tq *TaskQueue[T]) Kill() int {
 		tq.compl.Close()
 	}()
 	return len(tq.work)
+}
+
+func (tq *TaskQueue[T]) CloseDoor() {
+	// tq.doorMu.Lock()
+	// defer tq.doorMu.Unlock()
+	if tq.open {
+		tq.signalDoor <- struct{}{}
+	}
+	<-tq.switchComplete
+}
+
+func (tq *TaskQueue[T]) OpenDoor() {
+	// tq.doorMu.Lock()
+	// defer tq.doorMu.Unlock()
+	if !tq.open {
+		tq.signalDoor <- struct{}{}
+	}
+	<-tq.switchComplete
 }
 
 func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
@@ -157,10 +183,10 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 	work := make(chan *Task[T], opts.queueBuf)
 	compl := NewBusyChan[*Task[T]](nil)
 
-	q := &TaskQueue[T]{
-		work: work,
-		done: make(chan struct{}),
-		opts: opts,
+	tq := &TaskQueue[T]{
+		work:   work,
+		killed: make(chan struct{}),
+		opts:   opts,
 		bouncer: NewBusyChan(
 			func(t *Task[T]) *Task[T] {
 				t.CancelWith(ErrTaskKilled)
@@ -168,10 +194,25 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 				return t
 			},
 		),
-		compl: compl,
+		compl:          compl,
+		signalDoor:     make(chan struct{}),
+		open:           true,
+		switchComplete: make(chan struct{}),
 	}
 
-	return q
+	go func() {
+		for {
+			select {
+			case <-tq.signalDoor:
+				tq.open = !tq.open
+			case <-tq.killed:
+				return
+			}
+			tq.switchComplete <- struct{}{}
+		}
+	}()
+
+	return tq
 }
 
 func (tq *TaskQueue[T]) Start() chan *Task[T] {
@@ -192,7 +233,7 @@ func (tq *TaskQueue[T]) Start() chan *Task[T] {
 				if ok {
 					tq.work <- guest
 				}
-			case <-tq.done:
+			case <-tq.killed:
 				close(tq.work)
 				tq.cancelWork(tq.work, tq.compl)
 				return
@@ -210,7 +251,7 @@ func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out *BusyChan[*Task[T]])
 		go func() {
 			defer wg.Done()
 			select {
-			case <-tq.done:
+			case <-tq.killed:
 				t.CancelWith(ErrTaskKilled)
 				out.Send(t)
 			default:
@@ -249,7 +290,7 @@ func (tq *TaskQueue[T]) runTask(t *Task[T]) *Task[T] {
 	select {
 	case <-t.Done():
 		return t
-	case <-tq.done:
+	case <-tq.killed:
 		t.CancelWith(ErrTaskKilled)
 		return t
 	case res := <-resCh:
