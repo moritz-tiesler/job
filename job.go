@@ -155,25 +155,20 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 		o(opts)
 	}
 	work := make(chan *Task[T], opts.queueBuf)
-	compl :=
-		BusyChan[*Task[T]]{
-			ch:        make(chan *Task[T]),
-			abortSend: make(chan struct{}),
-		}
+	compl := NewBusyChan[*Task[T]](nil)
+
 	q := &TaskQueue[T]{
 		work: work,
 		done: make(chan struct{}),
 		opts: opts,
-		bouncer: &BusyChan[*Task[T]]{
-			ch:        make(chan *Task[T]),
-			abortSend: make(chan struct{}),
-			onAbort: func(t *Task[T]) *Task[T] {
+		bouncer: NewBusyChan(
+			func(t *Task[T]) *Task[T] {
 				t.CancelWith(ErrTaskKilled)
 				compl.Send(t)
 				return t
 			},
-		},
-		compl: &compl,
+		),
+		compl: compl,
 	}
 
 	return q
@@ -288,6 +283,14 @@ type BusyChan[T any] struct {
 	wg        sync.WaitGroup
 	abortSend chan struct{}
 	onAbort   func(T) T
+}
+
+func NewBusyChan[T any](onAbort func(T) T) *BusyChan[T] {
+	return &BusyChan[T]{
+		ch:        make(chan T),
+		abortSend: make(chan struct{}),
+		onAbort:   onAbort,
+	}
 }
 
 func (bc *BusyChan[T]) Send(val T) {
