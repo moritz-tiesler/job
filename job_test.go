@@ -8,49 +8,6 @@ import (
 	"time"
 )
 
-func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
-	select {
-	case <-task.Done():
-	default:
-		t.Errorf("expected task Res to done, got running task")
-		return false
-	}
-	ok := true
-	tRes := task.Res
-	if !reflect.DeepEqual(res, tRes) {
-		t.Errorf("expected task Res to be=%v, got=%v", res, tRes)
-		ok = ok && false
-	}
-	tErr := task.Err
-	if errors.Is(err, ErrTaskPanic) {
-		if !errors.Is(tErr, ErrTaskPanic) {
-			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
-			ok = ok && false
-		}
-
-	} else if errors.Is(err, ErrTaskCanceled) {
-		if !errors.Is(tErr, ErrTaskCanceled) {
-			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
-			ok = ok && false
-		}
-	} else if errors.Is(err, ErrTaskKilled) {
-		if !errors.Is(tErr, ErrTaskKilled) {
-			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
-			ok = ok && false
-		}
-	} else {
-		if err != tErr {
-			if err == nil || tErr == nil {
-				t.Errorf("expected task err to be=%v, got=%v", err, tErr)
-			} else if err.Error() != tErr.Error() {
-				t.Errorf("expected task err to be=%v, got=%v", err, tErr)
-				ok = ok && false
-			}
-		}
-	}
-	return ok
-}
-
 func TestTaskCompleteCancelAfterComplete(t *testing.T) {
 	f := func() (string, error) {
 		return "done", nil
@@ -74,31 +31,34 @@ func TestTaskCompleteWithError(t *testing.T) {
 	f := func() (string, error) {
 		return "done", tErr
 	}
-	task3 := NewTask(f)
-	task3.Run()
-	task3.Cancel()
+	{
+		task := NewTask(f)
+		task.Run()
+		task.Cancel()
+		testDoneTask(t, task, "done", tErr)
+	}
 
-	testDoneTask(t, task3, "done", tErr)
+	{
+		task := NewTask(f)
+		task.Cancel()
+		task.Run()
+		testDoneTask(t, task, "", ErrTaskCanceled)
+	}
 
-	task4 := NewTask(f)
-	task4.Cancel()
-	task4.Run()
-
-	testDoneTask(t, task4, "", ErrTaskCanceled)
 }
 
 func TestTaskCompletesExactlyOnce(t *testing.T) {
 	f := func() (string, error) {
 		return "done", nil
 	}
-	task3 := NewTask(f)
-	task3.Run()
-	task3.f = func() (string, error) {
+	task := NewTask(f)
+	task.Run()
+	task.f = func() (string, error) {
 		return "done again", nil
 	}
-	task3.Run()
+	task.Run()
 
-	testDoneTask(t, task3, "done", nil)
+	testDoneTask(t, task, "done", nil)
 }
 
 func TestTaskCancelWithCustomError(t *testing.T) {
@@ -106,21 +66,21 @@ func TestTaskCancelWithCustomError(t *testing.T) {
 	f := func() (string, error) {
 		return "done", nil
 	}
-	task3 := NewTask(f)
-	task3.CancelWith(myErr)
+	task := NewTask(f)
+	task.CancelWith(myErr)
 
-	testDoneTask(t, task3, "", myErr)
+	testDoneTask(t, task, "", myErr)
 }
 
 func TestTaskCustomComplete(t *testing.T) {
 	f := func() (string, error) {
 		return "done", nil
 	}
-	task3 := NewTask(f)
-	task3.Complete("also done", nil)
-	task3.Run()
+	task := NewTask(f)
+	task.Complete("also done", nil)
+	task.Run()
 
-	testDoneTask(t, task3, "also done", nil)
+	testDoneTask(t, task, "also done", nil)
 }
 
 func TestQueueKillBeforeComplete(t *testing.T) {
@@ -350,28 +310,28 @@ func TestQueuePendingWorkAndCompletedWorkSentToOutAferKill(t *testing.T) {
 func TestQueueCancelTaskBeforeExecution(t *testing.T) {
 	q := NewQueue[string]()
 
-	fCanceled := func() (string, error) {
+	block := func() (string, error) {
 		ch := make(chan struct{})
 		<-ch
 		return "f", nil
 	}
-	cancelledTask := NewTask(fCanceled)
+	blockingTask := NewTask(block)
 
 	f := func() (string, error) {
 		<-time.After(10 * time.Millisecond)
-		cancelledTask.Cancel()
+		blockingTask.Cancel()
 		return "f", nil
 	}
 	task := NewTask(f)
 
 	out := q.Start()
-	q.Push(cancelledTask)
+	q.Push(blockingTask)
 	q.Push(task)
 
 	<-task.Done()
 	testDoneTask(t, task, "f", nil)
-	<-cancelledTask.Done()
-	testDoneTask(t, cancelledTask, "", ErrTaskCanceled)
+	<-blockingTask.Done()
+	testDoneTask(t, blockingTask, "", ErrTaskCanceled)
 
 	nTasks := 2
 	n := 0
@@ -386,7 +346,7 @@ func TestQueueCancelTaskBeforeExecution(t *testing.T) {
 		if tt == task {
 			testDoneTask(t, tt, "f", nil)
 		}
-		if tt == cancelledTask {
+		if tt == blockingTask {
 			testDoneTask(t, tt, "", ErrTaskCanceled)
 		}
 		if n == nTasks {
@@ -398,4 +358,47 @@ func TestQueueCancelTaskBeforeExecution(t *testing.T) {
 		t.Errorf("expected %d tasks in out, got %d", nTasks, n)
 	}
 
+}
+
+func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
+	select {
+	case <-task.Done():
+	default:
+		t.Errorf("expected task Res to done, got running task")
+		return false
+	}
+	ok := true
+	tRes := task.Res
+	if !reflect.DeepEqual(res, tRes) {
+		t.Errorf("expected task Res to be=%v, got=%v", res, tRes)
+		ok = ok && false
+	}
+	tErr := task.Err
+	if errors.Is(err, ErrTaskPanic) {
+		if !errors.Is(tErr, ErrTaskPanic) {
+			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+			ok = ok && false
+		}
+
+	} else if errors.Is(err, ErrTaskCanceled) {
+		if !errors.Is(tErr, ErrTaskCanceled) {
+			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+			ok = ok && false
+		}
+	} else if errors.Is(err, ErrTaskKilled) {
+		if !errors.Is(tErr, ErrTaskKilled) {
+			t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+			ok = ok && false
+		}
+	} else {
+		if err != tErr {
+			if err == nil || tErr == nil {
+				t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+			} else if err.Error() != tErr.Error() {
+				t.Errorf("expected task err to be=%v, got=%v", err, tErr)
+				ok = ok && false
+			}
+		}
+	}
+	return ok
 }
