@@ -245,22 +245,22 @@ func (tq *TaskQueue[T]) Start() chan *Task[T] {
 }
 
 func (tq *TaskQueue[T]) runWorker(work <-chan *Task[T], out *BusyChan[*Task[T]]) {
-	var wg sync.WaitGroup
+	// var wg sync.WaitGroup
 	for t := range work {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			select {
-			case <-tq.killed:
-				t.CancelWith(ErrTaskKilled)
-				out.Send(t)
-			default:
-				tt := tq.runTask(t)
-				out.Send(tt)
-			}
-		}()
+		// wg.Add(1)
+		// go func() {
+		// defer wg.Done()
+		select {
+		case <-tq.killed:
+			t.CancelWith(ErrTaskKilled)
+			out.Send(t)
+		default:
+			tt := tq.runTask(t)
+			out.Send(tt)
+		}
+		// }()
 	}
-	wg.Wait()
+	// wg.Wait()
 }
 
 func (tq *TaskQueue[T]) cancelWork(work chan *Task[T], out *BusyChan[*Task[T]]) {

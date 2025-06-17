@@ -87,17 +87,17 @@ func TestTaskCustomComplete(t *testing.T) {
 
 func TestQueueKillBeforeComplete(t *testing.T) {
 
+	sig := make(chan struct{})
 	f := func() (string, error) {
 		return "done", nil
 	}
 
 	ff := func() (string, error) {
-		ch := make(chan string)
-		<-ch
+		<-sig
 		return "done", nil
 	}
 
-	q := NewQueue[string]()
+	q := NewQueue[string](WithWorkers[string](2))
 	q.Start()
 	fast, _ := q.PushFunc(f)
 	slow, _ := q.PushFunc(ff)
@@ -113,21 +113,22 @@ func TestQueueKillBeforeComplete(t *testing.T) {
 }
 func TestQueueKillBeforeCompleteLoop(t *testing.T) {
 
-	q := NewQueue[string]()
+	q := NewQueue[string](WithWorkers[string](2))
+	sig := make(chan struct{})
 
 	f := func() (string, error) {
 		return "done", nil
 	}
 
 	ff := func() (string, error) {
-		ch := make(chan string)
-		<-ch
+		<-sig
 		return "done", nil
 	}
 
 	out := q.Start()
 	nTasks := 2
 	fast, _ := q.PushFunc(f)
+
 	slow, _ := q.PushFunc(ff)
 	go func() {
 		<-fast.Done()
@@ -313,8 +314,7 @@ func TestQueueCancelTaskBeforeExecution(t *testing.T) {
 	q := NewQueue[string]()
 
 	block := func() (string, error) {
-		ch := make(chan struct{})
-		<-ch
+		<-time.After(1000 * time.Millisecond)
 		return "f", nil
 	}
 	blockingTask := NewTask(block)
@@ -497,7 +497,7 @@ func BenchmarkBaseQ(b *testing.B) {
 	}
 
 	benchF := func() {
-		work, results := initQueue(10)
+		work, results := initQueue(100)
 		nTasks := 1000
 		go func() {
 			for range nTasks {
@@ -522,7 +522,7 @@ func BenchmarkFancyQ(b *testing.B) {
 
 	benchF := func() {
 
-		tq := initQueue(10)
+		tq := initQueue(100)
 		results := tq.Start()
 		nTasks := 1000
 		for range nTasks {
