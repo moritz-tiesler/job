@@ -454,9 +454,14 @@ func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 }
 
 func stringWork() (string, error) {
-	<-time.After(time.Duration(rand.Intn(50)) * time.Millisecond)
+	<-time.After(time.Duration(rand.Intn(10)) * time.Millisecond)
 	return "f", nil
 }
+
+var (
+	BENCH_TASKS   int = 1000
+	BENCH_WORKERS int = 100
+)
 
 func BenchmarkBaseQ(b *testing.B) {
 
@@ -470,26 +475,16 @@ func BenchmarkBaseQ(b *testing.B) {
 		var wg sync.WaitGroup
 
 		for range workers {
-			// launch worker
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				var wwg sync.WaitGroup
 				for task := range work {
-					//launch task
-					wwg.Add(1)
-					go func() {
-						defer wwg.Done()
-						task.Run()
-						results <- TResult{task.Res, task.Err}
-					}()
+					task.Run()
+					results <- TResult{task.Res, task.Err}
 				}
-				// wait for single worker to finish
-				wwg.Wait()
 			}()
 		}
 		go func() {
-			// wait for all workers to finish
 			wg.Wait()
 			close(results)
 		}()
@@ -497,10 +492,9 @@ func BenchmarkBaseQ(b *testing.B) {
 	}
 
 	benchF := func() {
-		work, results := initQueue(100)
-		nTasks := 1000
+		work, results := initQueue(BENCH_WORKERS)
 		go func() {
-			for range nTasks {
+			for range BENCH_TASKS {
 				work <- NewTask(stringWork)
 			}
 			close(work)
@@ -521,11 +515,9 @@ func BenchmarkFancyQ(b *testing.B) {
 	}
 
 	benchF := func() {
-
-		tq := initQueue(100)
+		tq := initQueue(BENCH_WORKERS)
 		results := tq.Start()
-		nTasks := 1000
-		for range nTasks {
+		for range BENCH_TASKS {
 			tq.Push(NewTask(stringWork))
 		}
 
@@ -533,7 +525,7 @@ func BenchmarkFancyQ(b *testing.B) {
 		for tResult := range results {
 			n++
 			_ = tResult.Res
-			if n == nTasks {
+			if n == BENCH_TASKS {
 				tq.Kill()
 			}
 		}
