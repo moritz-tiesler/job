@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 )
@@ -449,4 +450,77 @@ func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 		}
 	}
 	return ok
+}
+
+func BenchmarkBaseQ(b *testing.B) {
+	baseChanQ := func() {
+		work := make(chan *Task[string])
+		results := make(chan struct {
+			res string
+			err error
+		})
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for task := range work {
+				task.Run()
+				results <- struct {
+					res string
+					err error
+				}{
+					task.Res, task.Err,
+				}
+			}
+		}()
+		f := func() (string, error) {
+			return "f", nil
+		}
+		nTasks := 10000
+		go func() {
+			for range nTasks {
+				work <- NewTask(f)
+			}
+			close(work)
+		}()
+		go func() {
+			wg.Wait()
+			close(results)
+		}()
+
+		for tResult := range results {
+			_ = tResult.res
+		}
+	}
+
+	for b.Loop() {
+		baseChanQ()
+	}
+}
+func BenchmarkFancyQ(b *testing.B) {
+	fancyQ := func() {
+
+		nTasks := 10000
+		tq := NewQueue[string]()
+		results := tq.Start()
+		f := func() (string, error) {
+			return "f", nil
+		}
+		for range nTasks {
+			tq.Push(NewTask(f))
+		}
+
+		n := 0
+		for tResult := range results {
+			n++
+			_ = tResult.Res
+			if n == nTasks {
+				tq.Kill()
+			}
+		}
+	}
+
+	for b.Loop() {
+		fancyQ()
+	}
 }
