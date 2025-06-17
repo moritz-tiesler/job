@@ -252,6 +252,8 @@ func (tq *TaskQueue[T]) runTask(t *Task[T]) *Task[T] {
 		resCh <- taskRes[T]{res, err}
 	}()
 	select {
+	case <-t.Done():
+		return t
 	case <-tq.done:
 		t.CancelWith(ErrTaskKilled)
 		return t

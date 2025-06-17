@@ -342,10 +342,60 @@ func TestQueuePendingWorkAndCompletedWorkSentToOutAferKill(t *testing.T) {
 	if n != nTasks {
 		t.Errorf("expected %d tasks in out queue, got %d", nTasks, n)
 	}
-	fmt.Printf("total=%d\n", n)
-	fmt.Printf("compl=%d\n", compl)
-	fmt.Printf("errored=%d\n", errored)
 	if compl == 0 {
 		t.Errorf("expected at least one task to finish, got %d", compl)
 	}
+}
+
+func TestQueueCancelTaskBeforeExecution(t *testing.T) {
+	q := NewQueue[string]()
+
+	fCanceled := func() (string, error) {
+		ch := make(chan struct{})
+		<-ch
+		return "f", nil
+	}
+	cancelledTask := NewTask(fCanceled)
+
+	f := func() (string, error) {
+		<-time.After(10 * time.Millisecond)
+		cancelledTask.Cancel()
+		return "f", nil
+	}
+	task := NewTask(f)
+
+	out := q.Start()
+	q.Push(cancelledTask)
+	q.Push(task)
+
+	<-task.Done()
+	testDoneTask(t, task, "f", nil)
+	<-cancelledTask.Done()
+	testDoneTask(t, cancelledTask, "", ErrTaskCanceled)
+
+	nTasks := 2
+	n := 0
+
+	killSig := make(chan struct{})
+	go func() {
+		<-killSig
+		q.Kill()
+	}()
+	for tt := range out {
+		n++
+		if tt == task {
+			testDoneTask(t, tt, "f", nil)
+		}
+		if tt == cancelledTask {
+			testDoneTask(t, tt, "", ErrTaskCanceled)
+		}
+		if n == nTasks {
+			close(killSig)
+		}
+	}
+
+	if n != nTasks {
+		t.Errorf("expected %d tasks in out, got %d", nTasks, n)
+	}
+
 }
