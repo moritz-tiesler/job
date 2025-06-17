@@ -3,6 +3,7 @@ package job
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"reflect"
 	"sync"
 	"testing"
@@ -452,62 +453,80 @@ func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 	return ok
 }
 
+func stringWork() (string, error) {
+	<-time.After(time.Duration(rand.Intn(50)) * time.Millisecond)
+	return "f", nil
+}
+
 func BenchmarkBaseQ(b *testing.B) {
-	baseChanQ := func() {
+
+	type TResult struct {
+		res string
+		err error
+	}
+	initQueue := func(workers int) (chan *Task[string], chan TResult) {
 		work := make(chan *Task[string])
-		results := make(chan struct {
-			res string
-			err error
-		})
+		results := make(chan TResult)
 		var wg sync.WaitGroup
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for task := range work {
-				task.Run()
-				results <- struct {
-					res string
-					err error
-				}{
-					task.Res, task.Err,
+
+		for range workers {
+			// launch worker
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				var wwg sync.WaitGroup
+				for task := range work {
+					//launch task
+					wwg.Add(1)
+					go func() {
+						defer wwg.Done()
+						task.Run()
+						results <- TResult{task.Res, task.Err}
+					}()
 				}
-			}
-		}()
-		f := func() (string, error) {
-			return "f", nil
+				// wait for single worker to finish
+				wwg.Wait()
+			}()
 		}
-		nTasks := 10000
 		go func() {
-			for range nTasks {
-				work <- NewTask(f)
-			}
-			close(work)
-		}()
-		go func() {
+			// wait for all workers to finish
 			wg.Wait()
 			close(results)
 		}()
+		return work, results
+	}
 
+	benchF := func() {
+		work, results := initQueue(10)
+		nTasks := 1000
+		go func() {
+			for range nTasks {
+				work <- NewTask(stringWork)
+			}
+			close(work)
+		}()
 		for tResult := range results {
 			_ = tResult.res
 		}
 	}
 
 	for b.Loop() {
-		baseChanQ()
+		benchF()
 	}
 }
 func BenchmarkFancyQ(b *testing.B) {
-	fancyQ := func() {
+	initQueue := func(workers int) *TaskQueue[string] {
+		tq := NewQueue(WithWorkers[string](workers))
+		return tq
+	}
 
-		nTasks := 10000
-		tq := NewQueue[string]()
+	benchF := func() {
+
+		tq := initQueue(10)
 		results := tq.Start()
-		f := func() (string, error) {
-			return "f", nil
-		}
+		nTasks := 1000
 		for range nTasks {
-			tq.Push(NewTask(f))
+			tq.Push(NewTask(stringWork))
 		}
 
 		n := 0
@@ -521,6 +540,6 @@ func BenchmarkFancyQ(b *testing.B) {
 	}
 
 	for b.Loop() {
-		fancyQ()
+		benchF()
 	}
 }
