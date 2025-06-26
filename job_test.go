@@ -454,7 +454,11 @@ func testDoneTask[T any](t *testing.T, task *Task[T], res T, err error) bool {
 }
 
 func stringWork() (string, error) {
-	<-time.After(time.Duration(rand.Intn(10)) * time.Millisecond)
+	r := rand.Intn(11)
+	<-time.After(time.Duration(r) * time.Millisecond)
+	if r%5 == 0 {
+		return "", fmt.Errorf("error")
+	}
 	return "f", nil
 }
 
@@ -465,13 +469,9 @@ var (
 
 func BenchmarkBaseQ(b *testing.B) {
 
-	type TResult struct {
-		res string
-		err error
-	}
-	initQueue := func(workers int) (chan *Task[string], chan TResult) {
+	initQueue := func(workers int) (chan *Task[string], chan *Task[string]) {
 		work := make(chan *Task[string])
-		results := make(chan TResult)
+		results := make(chan *Task[string])
 		var wg sync.WaitGroup
 
 		for range workers {
@@ -480,7 +480,7 @@ func BenchmarkBaseQ(b *testing.B) {
 				defer wg.Done()
 				for task := range work {
 					task.Run()
-					results <- TResult{task.Res, task.Err}
+					results <- task
 				}
 			}()
 		}
@@ -492,6 +492,7 @@ func BenchmarkBaseQ(b *testing.B) {
 	}
 
 	benchF := func() {
+		errored := 0
 		work, results := initQueue(BENCH_WORKERS)
 		go func() {
 			for range BENCH_TASKS {
@@ -499,8 +500,10 @@ func BenchmarkBaseQ(b *testing.B) {
 			}
 			close(work)
 		}()
-		for tResult := range results {
-			_ = tResult.res
+		for task := range results {
+			if task.Err != nil {
+				errored++
+			}
 		}
 	}
 
@@ -510,11 +513,14 @@ func BenchmarkBaseQ(b *testing.B) {
 }
 func BenchmarkFancyQ(b *testing.B) {
 	initQueue := func(workers int) *TaskQueue[string] {
-		tq := NewQueue(WithWorkers[string](workers))
+		tq := NewQueue(
+			WithWorkers[string](workers),
+		)
 		return tq
 	}
 
 	benchF := func() {
+		errored := 0
 		tq := initQueue(BENCH_WORKERS)
 		results := tq.Start()
 		for range BENCH_TASKS {
@@ -522,9 +528,11 @@ func BenchmarkFancyQ(b *testing.B) {
 		}
 
 		n := 0
-		for tResult := range results {
+		for task := range results {
 			n++
-			_ = tResult.Res
+			if task.Err != nil {
+				errored++
+			}
 			if n == BENCH_TASKS {
 				tq.Kill()
 			}
