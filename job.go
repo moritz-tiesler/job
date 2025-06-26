@@ -3,6 +3,7 @@ package job
 import (
 	"errors"
 	"fmt"
+	"iter"
 	"sync"
 )
 
@@ -217,11 +218,14 @@ func NewQueue[T any](options ...option[T]) *TaskQueue[T] {
 
 func (tq *TaskQueue[T]) Start() chan *Task[T] {
 
+	wChans := []chan *Task[T]{}
 	tq.wg.Add(tq.opts.numWorkers)
 	for range tq.opts.numWorkers {
+		wChan := make(chan *Task[T])
+		wChans = append(wChans, wChan)
 		go func() {
 			defer tq.wg.Done()
-			tq.runWorker(tq.work, tq.compl)
+			tq.runWorker(wChan, tq.compl)
 		}()
 	}
 	tq.wg.Add(1)
@@ -231,11 +235,14 @@ func (tq *TaskQueue[T]) Start() chan *Task[T] {
 			select {
 			case guest, ok := <-tq.bouncer.Ch():
 				if ok {
-					tq.work <- guest
+					fanOutFirst(guest, wChans...)
 				}
 			case <-tq.killed:
 				close(tq.work)
-				tq.cancelWork(tq.work, tq.compl)
+				// tq.cancelWork(tq.work, tq.compl)
+				for _, c := range wChans {
+					close(c)
+				}
 				return
 			}
 		}
@@ -363,4 +370,27 @@ func (bc *BusyChan[T]) Close() {
 
 func (bc *BusyChan[T]) AbortSends() {
 	close(bc.abortSend)
+}
+
+func Cycle[T any](it []T) iter.Seq[T] {
+	return func(yield func(V T) bool) {
+		i := 0
+		for {
+			v := it[i%len(it)]
+			i++
+			if !yield(v) {
+				return
+			}
+		}
+	}
+}
+
+func fanOutFirst[T any](in T, outs ...chan T) {
+	for c := range Cycle(outs) {
+		select {
+		case c <- in:
+			return
+		default:
+		}
+	}
 }

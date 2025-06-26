@@ -2,9 +2,12 @@ package job
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"math/rand"
+	"os"
 	"reflect"
+	"runtime/pprof"
 	"sync"
 	"testing"
 	"time"
@@ -512,6 +515,16 @@ func BenchmarkBaseQ(b *testing.B) {
 	}
 }
 func BenchmarkFancyQ(b *testing.B) {
+	var cpuProfile = flag.String("cpuprofile", "", "write CPU profile to file")
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		pprof.StartCPUProfile(f)
+		defer pprof.StopCPUProfile()
+	}
 	initQueue := func(workers int) *TaskQueue[string] {
 		tq := NewQueue(
 			WithWorkers[string](workers),
