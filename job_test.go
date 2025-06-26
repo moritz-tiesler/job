@@ -311,7 +311,7 @@ func TestQueuePendingWorkAndCompletedWorkSentToOutAferKill(t *testing.T) {
 }
 
 func TestQueueCancelTaskBeforeExecution(t *testing.T) {
-	q := NewQueue[string]()
+	q := NewQueue(WithWorkers[string](2))
 
 	block := func() (string, error) {
 		<-time.After(1000 * time.Millisecond)
